@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            runs_on: ubuntu-24.04
+            arch: amd64
+          - name: linux-arm64
+            runs_on: ubuntu-24.04-arm64
+            arch: arm64
+          - name: macos-amd64
+            runs_on: macos-13
+            arch: amd64
+          - name: macos-arm64
+            runs_on: macos-14
+            arch: arm64
+          - name: windows-amd64
+            runs_on: windows-latest
+            arch: amd64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Haskell (Stack)
+        uses: haskell-actions/setup@v2
+        with:
+          enable-stack: true
+          stack-version: latest
+
+      - name: Cache Stack
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.stack
+            .stack-work
+            ~/AppData/Roaming/stack
+            ~/AppData/Local/Programs/stack
+          key: ${{ runner.os }}-${{ matrix.arch }}-stack-${{ hashFiles('stack.yaml.lock', 'stack.yaml', '*.cabal') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-stack-
+
+      - name: Install CI tools (hlint, cabal-install, packdeps)
+        run: stack install hlint cabal-install packdeps
+
+      - name: Build (copy binary)
+        run: |
+          mkdir -p ./bin/
+          stack build --copy-bins --local-bin-path=./bin/
+
+      - name: Build (pedantic; compile tests)
+        run: stack build --pedantic --test --no-run-tests
+
+      - name: Run tests
+        run: stack test
+
+      - name: Lint (hlint) [unix]
+        if: runner.os != 'Windows'
+        run: git ls-files | grep '\.l\?hs$' | xargs stack exec -- hlint -X QuasiQuotes "$@"
+
+      - name: Lint (hlint) [windows]
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = git ls-files | Where-Object { $_ -match '\.l?hs$' }
+          if ($files.Count -eq 0) {
+            Write-Host 'No Haskell files found for hlint.'
+            exit 0
+          }
+          stack exec -- hlint -X QuasiQuotes -- $files
+
+      - name: Dependency checks (Cabal/packdeps) [linux-amd64 only]
+        if: matrix.name == 'linux-amd64'
+        run: |
+          stack exec -- cabal update
+          stack exec --no-ghc-package-path -- cabal install --only-d --dry-run --reorder-goals
+          stack exec -- packdeps *.cabal || true
+
+      - name: Upload binary artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: videofilter-${{ matrix.name }}
+          path: bin/
+          if-no-files-found: error
+
+      - name: Note about Windows arm64
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host 'Note: GitHub-hosted Windows ARM64 runners are not generally available; this workflow builds Windows amd64 only.'
