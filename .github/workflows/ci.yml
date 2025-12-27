@@ -21,10 +21,10 @@ jobs:
             runs_on: ubuntu-24.04-arm64
             arch: arm64
           - name: macos-amd64
-            runs_on: macos-13
+            runs_on: macos-15-intel
             arch: amd64
           - name: macos-arm64
-            runs_on: macos-14
+            runs_on: macos-15
             arch: arm64
           - name: windows-amd64
             runs_on: windows-latest
@@ -52,12 +52,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ matrix.arch }}-stack-
 
-      - name: Install CI tools (hlint, cabal-install, packdeps)
-        run: stack install hlint cabal-install packdeps
+      - name: Install CI tools (hlint, cabal-install)
+        run: stack install hlint cabal-install
 
-      - name: Build (copy binary)
+      - name: Build (copy binary) [unix]
+        if: runner.os != 'Windows'
         run: |
           mkdir -p ./bin/
+          stack build --copy-bins --local-bin-path=./bin/
+
+      - name: Build (copy binary) [windows]
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .\bin | Out-Null
           stack build --copy-bins --local-bin-path=./bin/
 
       - name: Build (pedantic; compile tests)
@@ -86,7 +94,7 @@ jobs:
         run: |
           stack exec -- cabal update
           stack exec --no-ghc-package-path -- cabal install --only-d --dry-run --reorder-goals
-          stack exec -- packdeps *.cabal || true
+          echo 'Skipping packdeps: version constraints incompatible with current Cabal in snapshot.'
 
       - name: Upload binary artifacts
         uses: actions/upload-artifact@v4
